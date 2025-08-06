@@ -1,0 +1,75 @@
+# Stage de base
+FROM php:8.2-fpm AS base
+
+# Installation des extensions PHP nécessaires
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    libpng-dev \
+    libonig-dev \
+    libxml2-dev \
+    zip \
+    unzip \
+    libssl-dev \
+    pkg-config \
+    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Installation de l'extension MongoDB
+RUN pecl install mongodb-1.17.0 \
+    && docker-php-ext-enable mongodb
+
+# Installation de Composer avec version spécifique
+COPY --from=composer:2.6 /usr/bin/composer /usr/bin/composer
+
+# Configuration du répertoire de travail
+WORKDIR /var/www/html
+
+# Copie des fichiers de configuration PHP
+COPY docker/php/php.ini /usr/local/etc/php/conf.d/app.ini
+
+# Copie du script d'entrée
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Copie des fichiers de l'application
+COPY . .
+
+# Stage de développement
+FROM base AS development
+
+# Installation des dépendances Composer avec packages de dev
+RUN composer install --optimize-autoloader --no-interaction
+
+# Permissions
+RUN chown -R www-data:www-data /var/www/html \
+    && chmod -R 755 /var/www/html/var
+
+# Exposition du port PHP-FPM
+EXPOSE 9000
+
+# ENTRYPOINT pour flexibilité + sécurité
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# CMD pour la flexibilité en développement
+CMD ["php-fpm"]
+
+# Stage de production
+FROM base AS production
+
+# Installation des dépendances Composer sans packages de dev
+RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
+
+# Optimisations pour la production
+RUN composer dump-autoload --optimize --classmap-authoritative
+
+# Permissions
+RUN chown -R www-data:www-data /var/www/html \
+    && chmod -R 755 /var/www/html/var \
+    && chmod -R 555 /var/www/html/public
+
+# Exposition du port PHP-FPM
+EXPOSE 9000
+
+# ENTRYPOINT pour la sécurité en production
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["php-fpm"]
